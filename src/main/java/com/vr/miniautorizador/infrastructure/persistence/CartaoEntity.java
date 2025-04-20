@@ -12,6 +12,10 @@ import java.math.BigDecimal;
 @Setter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CartaoEntity {
+
+    @Version
+    private Long version;
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;

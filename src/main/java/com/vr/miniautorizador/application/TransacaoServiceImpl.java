@@ -6,6 +6,10 @@ import com.vr.miniautorizador.domain.Transacao;
 import com.vr.miniautorizador.domain.repository.CartaoRepository;
 import com.vr.miniautorizador.infrastructure.persistence.CartaoEntity;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.PessimisticLockingFailureException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,15 +19,32 @@ public class TransacaoServiceImpl implements TransacaoUseCase {
 
     private final CartaoRepository cartaoRepository;
 
+    @Retryable(
+            value = { ObjectOptimisticLockingFailureException.class, PessimisticLockingFailureException.class },
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 100)
+    )
+
     @Override
     @Transactional
     public AutorizacaoResult autorizarTransacao(Transacao transacao) {
-        return cartaoRepository.findByNumero(transacao.getNumeroCartao())
-                .map(cartaoEntity -> processarTransacao(cartaoEntity, transacao))
-                .orElse(AutorizacaoResult.CARTAO_INEXISTENTE);
+        CartaoEntity cartaoEntity = cartaoRepository.findByNumeroWithLock(transacao.getNumeroCartao()).orElse(null);
+        if(cartaoEntity == null){
+            return  AutorizacaoResult.CARTAO_INEXISTENTE;
+        }
+
+        Cartao cartao = cartaoEntity.toDomain();
+        AutorizacaoResult result = processarTransacao(cartaoEntity, transacao);
+
+        if(result == AutorizacaoResult.APROVADA){
+            cartao.debitar(transacao.getValor());
+            cartaoEntity.setSaldo(cartao.getSaldo());
+        }
+
+        return result;
     }
 
-    private AutorizacaoResult processarTransacao(CartaoEntity cartaoEntity, Transacao transacao) {
+    public AutorizacaoResult processarTransacao(CartaoEntity cartaoEntity, Transacao transacao) {
 
         // Converte para domínio para aplicar as regras de negócio
         Cartao cartao = cartaoEntity.toDomain();
